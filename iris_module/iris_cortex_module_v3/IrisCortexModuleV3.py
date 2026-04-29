@@ -12,8 +12,10 @@ from __future__ import annotations
 import traceback
 from typing import List
 
+# IrisPipelineTypes was removed from iris_interface in iris-module-interface >= 1.2
+# It is not used in this module — import only what is needed.
 from iris_interface.IrisModuleInterface import (
-    IrisPipelineTypes, IrisModuleInterface, IrisModuleTypes
+    IrisModuleInterface, IrisModuleTypes
 )
 import iris_interface.IrisInterfaceStatus as InterfaceStatus
 
