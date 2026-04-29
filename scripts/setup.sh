@@ -95,6 +95,35 @@ for KEY in SECRET_KEY SECURITY_PASSWORD_SALT DB_PASS DB_HOST; do
   ok "  ${KEY} = ${VAL:0:12}..."
 done
 
+# ── 7. Enable pgcrypto PostgreSQL extension ────────────────────
+# FIX: IRIS uses gen_random_uuid() which requires pgcrypto.
+# The stock PostgreSQL image does NOT auto-enable it.
+# Without it every fresh deploy fails with:
+#   "function gen_random_uuid() does not exist"
+# We start the DB container alone, wait for it to be healthy,
+# enable the extension, then bring up the full stack.
+info "Starting DB container to enable pgcrypto extension..."
+docker compose up -d db
+info "Waiting for DB to be healthy (up to 60s)..."
+for i in $(seq 1 30); do
+  STATUS=$(docker inspect --format='{{.State.Health.Status}}' iriswebapp_db 2>/dev/null || echo 'starting')
+  if [ "$STATUS" = "healthy" ]; then
+    ok "DB is healthy"
+    break
+  fi
+  echo -n "."
+  sleep 2
+done
+echo ""
+
+DB_USER=$(grep '^POSTGRES_USER=' .env | cut -d'=' -f2-)
+DB_NAME=$(grep '^POSTGRES_DB='   .env | cut -d'=' -f2-)
+
+info "Enabling pgcrypto in ${DB_NAME}..."
+docker exec iriswebapp_db psql -U "${DB_USER}" -d "${DB_NAME}" \
+  -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;" 2>&1 | grep -v '^$' || true
+ok "pgcrypto enabled in ${DB_NAME}"
+
 info "=== Setup complete ==="
 info "Next: docker compose up -d"
 info "Then: docker compose ps  (wait ~90s for all containers healthy)"
