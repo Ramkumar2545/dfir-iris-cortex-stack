@@ -107,16 +107,24 @@ services:
     image: ghcr.io/dfir-iris/iriswebapp_nginx:${IRIS_VERSION:-v2.4.20}
     container_name: iriswebapp_nginx
     restart: unless-stopped
-    # FIX: Do NOT pass SERVER_NAME or IRIS_UPSTREAM via env_file here.
-    # The IRIS nginx image reads SERVER_NAME to build "upstream app:<port>".
-    # If SERVER_NAME is blank or missing a port suffix, nginx fails with:
-    #   "invalid port in upstream ':'"
-    # Instead we pass only what nginx needs:
+    # ── IRIS nginx image entrypoint uses these exact env vars ──────────────
+    # INTERFACE_HTTPS_PORT : port for "listen <PORT> ssl" directive
+    # CERT_FILENAME        : filename of TLS cert inside /www/certs/
+    # KEY_FILENAME         : filename of TLS key  inside /www/certs/
+    #
+    # DO NOT set SERVER_NAME here — the image uses it as the TLS SNI hostname
+    # in the listen directive, not as the upstream. When it's a plain name like
+    # "iriswebapp_app" nginx parses "listen iriswebapp_app ssl" → tries DNS for
+    # a port → "host not found in ssl of the listen directive".
+    #
+    # The upstream to the app container is hardcoded in the image's nginx.conf
+    # template as "app:8000" — no env var needed for that.
     environment:
-      - IRIS_UPSTREAM_PORT=8000
-      - SERVER_NAME=iriswebapp_app
+      - INTERFACE_HTTPS_PORT=443
+      - CERT_FILENAME=iris.crt
+      - KEY_FILENAME=iris.key
     ports:
-      - "${INTERFACE_HTTPS_PORT:-443}:${INTERFACE_HTTPS_PORT:-443}"
+      - "443:443"
     volumes:
       - ./certificates/web_certificates/:/www/certs/:ro
     depends_on:
@@ -173,23 +181,16 @@ services:
     image: thehiveproject/cortex:latest
     container_name: cortex
     restart: unless-stopped
-    # user: root fixes AccessDeniedException on /tmp/cortex-jobs AND /var/log/cortex
     user: "0:0"
     environment:
       JAVA_OPTS: "-Xms1g -Xmx1g -XX:MaxMetaspaceSize=400m -XX:ReservedCodeCacheSize=256m"
-      # FIX: pass ES URI as environment (do NOT rely on application.conf for this)
-      # The entrypoint script reads these env vars and patches application.conf
       es_uri: http://cortex_es:9200
       job_directory: /tmp/cortex-jobs
       docker_job_directory: /tmp/cortex-jobs
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /tmp/cortex-jobs:/tmp/cortex-jobs
-      # FIX 1: Remove :ro so entrypoint can chown /etc/cortex (was causing
-      #   "chown: changing ownership of '/etc/cortex/application.conf': Read-only file system")
       - ./cortex/config:/etc/cortex
-      # FIX 2: Mount log dir from host with open perms (pre-created by setup.sh with chmod 777)
-      #   Fixes: "Permission denied" on /var/log/cortex/application.log
       - ./cortex/logs:/var/log/cortex
       - ./cortex/neurons:/opt/cortexneurons
     ports:
