@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 """
 IrisCortexModule v3 — DFIR-IRIS module class
-Registers hooks and dispatches to the core handler.
-
 Compatible with: IRIS 2.x, Cortex 3.x and 4.x, Python 3.9+
-No cortex4py dependency — uses native requests.
 """
 
 from __future__ import annotations
@@ -99,23 +96,25 @@ mod_config = [
 
 
 class IrisCortexModuleV3(IrisModuleInterface):
-    _module_name        = "IrisCortexModuleV3"
-    _module_description = mod_description
-    _module_version     = "3.0.0"
-    # _interface_version must match the iris-module-interface package version
-    # installed in the container. iris_interface 1.1.0 is shipped with IRIS 2.x.
-    _interface_version  = 1.1
-    _module_type        = IrisModuleTypes.module_processor
+    _module_name          = "IrisCortexModuleV3"
+    _module_description   = mod_description
+    _module_version       = "3.0.0"
+    _interface_version    = 1.1
+    _module_type          = IrisModuleTypes.module_processor
     _module_configuration = mod_config
-    _module_tags        = ["Cortex", "Analyzer", "Threat Intelligence"]
-    _is_active          = True
+    _module_tags          = ["Cortex", "Analyzer", "Threat Intelligence"]
+    _is_active            = True
 
-    def __init__(self):
-        super().__init__()
-        self.register_to_hook(module_name=self._module_name,
-                               iris_hook_name="on_postload_ioc_create")
-        self.register_to_hook(module_name=self._module_name,
-                               iris_hook_name="on_postload_ioc_update")
+    def register_hooks(self, module_id: int):
+        """
+        Called by IRIS during module registration.
+        Must override this — NOT __init__ — to register hooks.
+        register_to_hook() signature: (module_id: int, iris_hook_name: str, ...)
+        """
+        self.register_to_hook(module_id=module_id,
+                              iris_hook_name="on_postload_ioc_create")
+        self.register_to_hook(module_id=module_id,
+                              iris_hook_name="on_postload_ioc_update")
 
     def hooks_handler(self, hook_name: str, hook_ui_name: str, data: Any):
         """Called by IRIS Celery worker for every registered hook event."""
