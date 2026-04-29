@@ -8,10 +8,12 @@ setup(
     url="https://github.com/Ramkumar2545/dfir-iris-cortex-stack",
     packages=find_packages(),
     install_requires=[
+        # iris-module-interface is NOT on PyPI — it is pre-installed by
+        # the IRIS container image at /opt/venv/.../iris_interface/.
+        # Do NOT add it here or pip will fail with 'No matching distribution'.
         "requests>=2.28",
         "jinja2>=3.0",
         "urllib3>=1.26",
-        "iris-module-interface>=1.2",
     ],
     python_requires=">=3.9",
     entry_points={
