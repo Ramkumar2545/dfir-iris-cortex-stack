@@ -107,19 +107,29 @@ services:
     image: ghcr.io/dfir-iris/iriswebapp_nginx:${IRIS_VERSION:-v2.4.20}
     container_name: iriswebapp_nginx
     restart: unless-stopped
-    # ── IRIS nginx image entrypoint uses these exact env vars ──────────────
-    # INTERFACE_HTTPS_PORT : port for "listen <PORT> ssl" directive
-    # CERT_FILENAME        : filename of TLS cert inside /www/certs/
-    # KEY_FILENAME         : filename of TLS key  inside /www/certs/
+    # ────────────────────────────────────────────────────
+    # The IRIS nginx entrypoint runs envsubst on nginx.conf.template
+    # substituting EXACTLY these 6 variables (confirmed from entrypoint.sh):
     #
-    # DO NOT set SERVER_NAME here — the image uses it as the TLS SNI hostname
-    # in the listen directive, not as the upstream. When it's a plain name like
-    # "iriswebapp_app" nginx parses "listen iriswebapp_app ssl" → tries DNS for
-    # a port → "host not found in ssl of the listen directive".
+    #   envsubst '${INTERFACE_HTTPS_PORT} ${IRIS_UPSTREAM_SERVER}
+    #             ${IRIS_UPSTREAM_PORT} ${SERVER_NAME}
+    #             ${KEY_FILENAME} ${CERT_FILENAME}'
     #
-    # The upstream to the app container is hardcoded in the image's nginx.conf
-    # template as "app:8000" — no env var needed for that.
+    # ALL 6 must be set. Any blank = empty string in nginx.conf = parse error.
+    #
+    # IRIS_UPSTREAM_SERVER : Docker container name of the app  (iriswebapp_app)
+    # IRIS_UPSTREAM_PORT   : Port app listens on               (8000)
+    # SERVER_NAME          : nginx server_name directive value  (_  = catch-all)
+    # INTERFACE_HTTPS_PORT : Port for "listen N ssl"            (443)
+    # CERT_FILENAME        : TLS cert file in /www/certs/       (iris.crt)
+    # KEY_FILENAME         : TLS key  file in /www/certs/       (iris.key)
+    #
+    # DO NOT use env_file here — .env must not bleed SERVER_NAME into nginx
+    # ────────────────────────────────────────────────────
     environment:
+      - IRIS_UPSTREAM_SERVER=app
+      - IRIS_UPSTREAM_PORT=8000
+      - SERVER_NAME=_
       - INTERFACE_HTTPS_PORT=443
       - CERT_FILENAME=iris.crt
       - KEY_FILENAME=iris.key
