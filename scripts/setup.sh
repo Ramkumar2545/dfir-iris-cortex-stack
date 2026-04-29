@@ -27,16 +27,10 @@ chmod 777 /tmp/cortex-jobs
 ok "/tmp/cortex-jobs ready"
 
 # ── 3. Cortex config/log dirs ──────────────────────────────
-# FIX: /var/log/cortex must be owned/writable by cortex user (uid 1001)
-#   or by root if running user: "0:0".
-#   If this dir is created by Docker as root:root 755, cortex (uid 1001)
-#   cannot write → "Permission denied" on application.log
-# FIX: /etc/cortex must NOT be :ro in docker-compose
-#   The entrypoint does: chown -R cortex /etc/cortex
-#   If mounted :ro this fails → "Read-only file system"
+# /var/log/cortex must be writable by cortex uid 1001
+# /etc/cortex must NOT be :ro — entrypoint chowns it on startup
 info "Creating cortex directories with correct permissions"
 mkdir -p cortex/config cortex/logs cortex/neurons
-# chmod 777 so cortex container (any uid) can write
 chmod -R 777 cortex/logs
 chmod -R 755 cortex/config
 chmod -R 755 cortex/neurons
@@ -57,6 +51,19 @@ if [ ! -f certificates/web_certificates/iris.crt ]; then
 else
   ok "TLS cert already exists — skipping"
 fi
+
+# ── 4b. Fix TLS cert/key permissions ───────────────────────────
+# FIX: openssl generates iris.key as 600 (root-only read).
+# The nginx container runs as non-root — it cannot read a 600 key
+# through the volume mount, causing:
+#   "cannot load certificate key '/www/certs/iris.key': Permission denied"
+# 644 makes the key world-readable (acceptable for a self-signed lab cert).
+info "Setting TLS cert/key permissions to 644 (nginx readable)"
+chmod 644 certificates/web_certificates/iris.key
+chmod 644 certificates/web_certificates/iris.crt
+chmod 644 certificates/rootCA/irisRootCACert.pem
+ok "certificates/web_certificates/iris.key → 644"
+ok "certificates/web_certificates/iris.crt → 644"
 
 # ── 5. .env file setup ──────────────────────────────────────
 if [ ! -f .env ]; then
