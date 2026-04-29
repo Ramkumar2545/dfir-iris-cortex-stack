@@ -1,7 +1,0 @@
-[build-system]
-# setuptools.backends.legacy:build requires setuptools >= 68.
-# The IRIS container (Python 3.9) ships setuptools ~59-67, so use
-# the universally compatible build_meta backend instead.
-# This works on setuptools >= 40 and pip >= 19.
-requires = ["setuptools>=40", "wheel"]
-build-backend = "setuptools:build_meta"
