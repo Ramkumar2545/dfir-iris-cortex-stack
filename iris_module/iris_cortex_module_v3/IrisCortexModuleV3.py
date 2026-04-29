@@ -10,7 +10,7 @@ No cortex4py dependency — uses native requests.
 from __future__ import annotations
 
 import traceback
-from typing import List
+from typing import Any, List
 
 # IrisPipelineTypes was removed from iris_interface in iris-module-interface >= 1.2
 # It is not used in this module — import only what is needed.
@@ -101,35 +101,78 @@ mod_config = [
 
 
 class IrisCortexModuleV3(IrisModuleInterface):
-    _module_name    = "IrisCortexModuleV3"
+    _module_name        = "IrisCortexModuleV3"
     _module_description = mod_description
-    _module_version = "3.0.0"
-    _module_type    = IrisModuleTypes.module_processor
+    _module_version     = "3.0.0"
+    _module_type        = IrisModuleTypes.module_processor
     _module_configuration = mod_config
-    _module_tags    = ["Cortex", "Analyzer", "Threat Intelligence"]
-    _is_active      = True
+    _module_tags        = ["Cortex", "Analyzer", "Threat Intelligence"]
+    _is_active          = True
 
     def __init__(self):
         super().__init__()
+        # Register this module to fire on every IOC create / update event.
+        # Without register_to_hook() the module is discovered by the entry
+        # point but IRIS never invokes hooks_handler — it just sits idle.
+        self.register_to_hook(module_name=self._module_name,
+                               iris_hook_name="on_postload_ioc_create")
+        self.register_to_hook(module_name=self._module_name,
+                               iris_hook_name="on_postload_ioc_update")
 
-    def hooks_handler(self, hook_name: str, hook_ui_name: str, data: any):
+    def hooks_handler(self, hook_name: str, hook_ui_name: str, data: Any):
+        """Called by IRIS Celery worker for every registered hook event."""
         self.log.info(f"[IrisCortex v3] Hook fired: {hook_name}")
         try:
             handler = CortexHandler(
                 cortex_url=self._mod_config_string("cortex_url"),
                 cortex_api_key=self._mod_config_string("cortex_api_key"),
-                mod_config=self._mod_config,
+                mod_config=self._mod_config_dict(),
                 logger=self.log,
             )
             handler.handle_iocs(data)
         except Exception:
-            self.log.error(f"[IrisCortex v3] hooks_handler error:\n{traceback.format_exc()}")
+            self.log.error(
+                f"[IrisCortex v3] hooks_handler error:\n{traceback.format_exc()}"
+            )
+        # IRIS expects a return value from hooks_handler — returning success
+        # prevents the worker from logging a spurious warning.
+        return InterfaceStatus.I2Success()
+
+    # ------------------------------------------------------------------ #
+    # Helpers                                                              #
+    # ------------------------------------------------------------------ #
 
     def _mod_config_string(self, key: str, default: str = "") -> str:
+        """Safely retrieve a string config value."""
         val = self._mod_config.get(key, default)
         if val is None:
             return default
         return str(val)
+
+    def _mod_config_dict(self) -> dict:
+        """
+        Return a plain dict copy of the module config so handler.py never
+        holds a reference to the ORM-backed config object.  This also makes
+        it easy to unit-test the handler in isolation.
+        """
+        try:
+            # _mod_config may be an ORM object or a plain dict depending on
+            # the IRIS version.  Normalise to dict.
+            if isinstance(self._mod_config, dict):
+                return dict(self._mod_config)
+            # Attribute-style ORM config (iris-module-interface >= 1.2)
+            cfg: dict = {}
+            for param in mod_config:
+                k = param["param_name"]
+                cfg[k] = getattr(self._mod_config, k,
+                                  self._mod_config.get(k, param.get("default")))
+            return cfg
+        except Exception:
+            return dict(self._mod_config) if isinstance(self._mod_config, dict) else {}
+
+    # ------------------------------------------------------------------ #
+    # Pipeline stubs (required by IrisModuleInterface ABC)                #
+    # ------------------------------------------------------------------ #
 
     def pipeline_handler(self, pipeline_type, pipeline_data):
         return InterfaceStatus.I2Success()

@@ -254,24 +254,47 @@ class CortexHandler:
             return f"<pre>{json.dumps(results, indent=2, default=str)}</pre>"
 
     def _save(self, ioc: Any, name: str, html: str) -> None:
-        attr = f"CORTEX v3: {name}"
+        """
+        Persist the Cortex report as an IOC custom attribute.
+
+        IRIS 2.x does NOT expose add_attribute() on the IOC ORM object passed
+        to hooks_handler.  The correct approach is to write directly into
+        ioc_custom_attributes (a JSON column stored as a Python dict by IRIS)
+        so the Celery worker flushes it back to the DB at the end of the task.
+
+        Attribute name is prefixed with 'CORTEX v3:' so it is easily
+        distinguishable in the IRIS UI.
+        """
+        attr_key = f"CORTEX v3: {name}"
+        # Ensure html is a plain str — never let an ORM-proxied type sneak through.
+        html = safe_str(html)
+
+        # --- Primary path: ioc_custom_attributes dict (IRIS 2.x) ----------
+        try:
+            existing = getattr(ioc, "ioc_custom_attributes", None)
+            # IRIS stores this as JSON; it may arrive as a dict or None.
+            if not isinstance(existing, dict):
+                existing = {}
+            existing[attr_key] = html
+            ioc.ioc_custom_attributes = existing
+            self.log.info(f"[IrisCortex v3] ✔ Saved via ioc_custom_attributes: {attr_key}")
+            return
+        except Exception as exc:
+            self.log.warning(f"[IrisCortex v3] ioc_custom_attributes path failed: {exc}")
+
+        # --- Fallback: add_attribute() (future IRIS versions) --------------
         if hasattr(ioc, "add_attribute"):
             try:
-                ioc.add_attribute(attribute_name=attr, attribute_value=html)
-                self.log.info(f"[IrisCortex v3] ✔ Saved: {attr}")
+                ioc.add_attribute(attribute_name=attr_key, attribute_value=html)
+                self.log.info(f"[IrisCortex v3] ✔ Saved via add_attribute(): {attr_key}")
                 return
             except Exception as exc:
-                self.log.warning(f"[IrisCortex v3] add_attribute failed: {exc}")
-        try:
-            attrs = getattr(ioc, "ioc_custom_attributes", None) or {}
-            if isinstance(attrs, dict):
-                attrs[attr] = html
-                ioc.ioc_custom_attributes = attrs
-                self.log.info(f"[IrisCortex v3] ✔ Saved via dict: {attr}")
-                return
-        except Exception as exc:
-            self.log.warning(f"[IrisCortex v3] dict fallback failed: {exc}")
-        self.log.warning(f"[IrisCortex v3] Could not persist '{attr}'")
+                self.log.warning(f"[IrisCortex v3] add_attribute() failed: {exc}")
+
+        self.log.warning(
+            f"[IrisCortex v3] Could not persist '{attr_key}' — "
+            "neither ioc_custom_attributes nor add_attribute() worked."
+        )
 
     def handle_iocs(self, data: Any) -> None:
         client = self._get_client()
@@ -296,7 +319,7 @@ class CortexHandler:
                 self.log.warning("[IrisCortex v3] Empty IOC — skipping")
                 continue
 
-            raw_type  = safe_str(
+            raw_type = safe_str(
                 safe_attr(ioc, "ioc_type", "type_name") or
                 safe_attr(ioc, "ioc_type") or
                 (ioc.get("ioc_type") if isinstance(ioc, dict) else None) or "other"
@@ -304,7 +327,11 @@ class CortexHandler:
             dtype = self._resolve_type(raw_type)
             self.log.info(f"[IrisCortex v3] IOC={value!r} | IRIS={raw_type} | Cortex={dtype}")
 
-            active = client.analyzers_for_type(dtype) or analyzers if auto_select else analyzers
+            active = (
+                client.analyzers_for_type(dtype) or analyzers
+                if auto_select
+                else analyzers
+            )
             if not active:
                 self.log.warning(f"[IrisCortex v3] No analyzers for '{value}'")
                 continue
@@ -319,4 +346,6 @@ class CortexHandler:
                         html = self._render(results, aname, value, dtype)
                         self._save(ioc, aname, html)
                 except Exception as exc:
-                    self.log.error(f"[IrisCortex v3] {aname}/{value!r}: {exc}", exc_info=True)
+                    self.log.error(
+                        f"[IrisCortex v3] {aname}/{value!r}: {exc}", exc_info=True
+                    )

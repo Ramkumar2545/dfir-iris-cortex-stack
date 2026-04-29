@@ -1,0 +1,6 @@
+[build-system]
+# pyproject.toml is required for pip >= 21.3 subdirectory installs.
+# Without it, `pip install git+...#subdirectory=iris_module` may silently
+# fall back to legacy setup.py mode and fail inside containers.
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
