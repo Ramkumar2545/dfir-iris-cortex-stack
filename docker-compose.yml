@@ -33,6 +33,10 @@ services:
       - .env
     volumes:
       - db_data:/var/lib/postgresql/data
+      # ── Load pgcrypto BEFORE the IRIS init scripts run ──────
+      # 00-extensions.sql runs first (alphabetical order),
+      # ensuring gen_random_uuid() exists when 10-create_user.sh executes.
+      - ./scripts/init-extensions.sql:/docker-entrypoint-initdb.d/00-extensions.sql:ro
     networks:
       - iris_backend
     healthcheck:
@@ -124,7 +128,8 @@ services:
     # CERT_FILENAME        : TLS cert file in /www/certs/       (iris.crt)
     # KEY_FILENAME         : TLS key  file in /www/certs/       (iris.key)
     #
-    # DO NOT use env_file here — .env must not bleed SERVER_NAME into nginx
+    # !! DO NOT use env_file here — .env must not bleed SERVER_NAME into
+    #    nginx. SERVER_NAME must be set here only, as a catch-all "_".
     # ────────────────────────────────────────────────────
     environment:
       - IRIS_UPSTREAM_SERVER=app
