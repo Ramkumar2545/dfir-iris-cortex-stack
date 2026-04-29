@@ -1,51 +1,68 @@
 #!/usr/bin/env bash
 # =============================================================
 # DFIR-IRIS + Cortex 4.x — Setup Script
-# Run once before first docker compose up
+# Run once before first: docker compose up -d
 # =============================================================
 set -euo pipefail
 
-BLUE='\033[0;34m'; GREEN='\033[0;32m'; RED='\033[0;31m'; NC='\033[0m'
-info()  { echo -e "${BLUE}[INFO]${NC} $*"; }
-ok()    { echo -e "${GREEN}[OK]${NC}  $*"; }
-error() { echo -e "${RED}[ERR]${NC}  $*" >&2; exit 1; }
+BLUE='\033[0;34m'; GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'; NC='\033[0m'
+info()    { echo -e "${BLUE}[INFO]${NC} $*"; }
+ok()      { echo -e "${GREEN}[OK]${NC}  $*"; }
+warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
+err()     { echo -e "${RED}[ERR]${NC}  $*" >&2; exit 1; }
 
-info "=== DFIR-IRIS + Cortex Setup ==="
+info "=== DFIR-IRIS + Cortex 4.x Setup ==="
 
-# ── Kernel param for Elasticsearch ──────────────────────────
-info "Setting vm.max_map_count=262144 (required by Elasticsearch)"
+# ── 1. Kernel param for Elasticsearch ──────────────────────
+info "Setting vm.max_map_count=262144 (Elasticsearch requirement)"
 sudo sysctl -w vm.max_map_count=262144
 grep -q 'vm.max_map_count' /etc/sysctl.conf \
-  || echo 'vm.max_map_count=262144' | sudo tee -a /etc/sysctl.conf
-ok "Kernel param set"
+  || echo 'vm.max_map_count=262144' | sudo tee -a /etc/sysctl.conf > /dev/null
+ok "vm.max_map_count=262144 set persistently"
 
-# ── Cortex job directory ─────────────────────────────────────
-info "Creating /tmp/cortex-jobs with open permissions"
+# ── 2. Cortex job directory ─────────────────────────────────
+info "Creating /tmp/cortex-jobs"
 mkdir -p /tmp/cortex-jobs
 chmod 777 /tmp/cortex-jobs
 ok "/tmp/cortex-jobs ready"
 
-# ── TLS certificates ─────────────────────────────────────────
-info "Generating self-signed TLS certificates"
+# ── 3. Cortex config/log dirs ──────────────────────────────
+# FIX: /var/log/cortex must be owned/writable by cortex user (uid 1001)
+#   or by root if running user: "0:0".
+#   If this dir is created by Docker as root:root 755, cortex (uid 1001)
+#   cannot write → "Permission denied" on application.log
+# FIX: /etc/cortex must NOT be :ro in docker-compose
+#   The entrypoint does: chown -R cortex /etc/cortex
+#   If mounted :ro this fails → "Read-only file system"
+info "Creating cortex directories with correct permissions"
+mkdir -p cortex/config cortex/logs cortex/neurons
+# chmod 777 so cortex container (any uid) can write
+chmod -R 777 cortex/logs
+chmod -R 755 cortex/config
+chmod -R 755 cortex/neurons
+ok "Cortex dirs ready: cortex/config cortex/logs cortex/neurons"
+
+# ── 4. TLS certificates ─────────────────────────────────────
+info "Generating self-signed TLS certificate (10 years)"
 mkdir -p certificates/web_certificates certificates/rootCA certificates/ldap
-torch certificates/ldap/.keep 2>/dev/null || touch certificates/ldap/.keep
+touch certificates/ldap/.keep
 
 if [ ! -f certificates/web_certificates/iris.crt ]; then
   openssl req -x509 -nodes -days 3650 -newkey rsa:4096 \
     -keyout certificates/web_certificates/iris.key \
-    -out  certificates/web_certificates/iris.crt \
-    -subj "/C=IN/ST=TN/L=Chennai/O=DFIR/CN=iris.local" 2>/dev/null
+    -out   certificates/web_certificates/iris.crt \
+    -subj  "/C=IN/ST=TN/L=Chennai/O=DFIR/CN=iris.local" 2>/dev/null
   cp certificates/web_certificates/iris.crt certificates/rootCA/irisRootCACert.pem
   ok "TLS cert generated"
 else
   ok "TLS cert already exists — skipping"
 fi
 
-# ── .env setup ───────────────────────────────────────────────
+# ── 5. .env file setup ──────────────────────────────────────
 if [ ! -f .env ]; then
   cp .env.example .env
   SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-  SALT=$(python3 -c "import secrets; print(secrets.token_hex(16))")
+  SALT=$(python3   -c "import secrets; print(secrets.token_hex(16))")
   DBPASS="IrisDB$(openssl rand -hex 8)"
   DBADMIN="IrisAdmin$(openssl rand -hex 8)"
 
@@ -53,20 +70,24 @@ if [ ! -f .env ]; then
   sed -i "s|CHANGE_ME_password_salt|${SALT}|g" .env
   sed -i "s|CHANGE_ME_db_password|${DBPASS}|g" .env
   sed -i "s|CHANGE_ME_admin_password|${DBADMIN}|g" .env
-
-  # Keep DB_PASS in sync with POSTGRES_PASSWORD
-  sed -i "s|^DB_PASS=.*|DB_PASS=${DBPASS}|" .env
+  sed -i "s|^DB_PASS=.*|DB_PASS=${DBPASS}|"       .env
 
   ok ".env created with auto-generated secrets"
-  info "Review your .env: nano .env"
+  warn "Review before production: nano .env"
 else
   ok ".env already exists — skipping auto-generation"
 fi
 
-# ── Cortex log dir ───────────────────────────────────────────
-mkdir -p cortex/logs cortex/neurons
-ok "Cortex directories ready"
+# ── 6. Final check ──────────────────────────────────────────
+info "Verifying critical .env keys..."
+for KEY in SECRET_KEY SECURITY_PASSWORD_SALT DB_PASS DB_HOST; do
+  VAL=$(grep "^${KEY}=" .env | cut -d'=' -f2- || true)
+  if [ -z "$VAL" ] || echo "$VAL" | grep -qi 'change_me'; then
+    err "${KEY} is missing or still placeholder! Edit .env"
+  fi
+  ok "  ${KEY} = ${VAL:0:12}..."
+done
 
-info "=== Setup complete! ==="
-info "Next step: docker compose up -d"
-info "Then wait 90s and run: docker compose ps"
+info "=== Setup complete ==="
+info "Next: docker compose up -d"
+info "Then: docker compose ps  (wait ~90s for all containers healthy)"
